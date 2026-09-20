@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, List, Dict
 import logging
+import time
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -9,30 +11,44 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Prompt Injection Defense System", version="0.1.0")
 
+# Import layer implementations
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent))
+
+from src.layer1.inference import classify_input
+from src.layer2.canary_manager import CanaryManager
+from src.layer3.auditor import ToolCallAuditor
+from src.common.config import Config
+
 
 # Request/Response Models
 class MessageRequest(BaseModel):
     message: str
     user_intent: Optional[str] = None  # Original user's stated goal
     tool_call: Optional[dict] = None  # Proposed tool/action to execute
+    tool_call_history: Optional[List[dict]] = None  # Recent tool calls for context
 
 
 class Layer1Result(BaseModel):
-    classification: Literal["benign", "direct-injection", "indirect-injection", "jailbreak"]
+    classification: Literal["benign", "direct_injection", "indirect_injection", "jailbreak"]
     confidence: float
     blocked: bool
+    latency_ms: float
 
 
 class Layer2Result(BaseModel):
     canary_triggered: bool
     delimiter_violation: bool
     blocked: bool
+    latency_ms: float
 
 
 class Layer3Result(BaseModel):
-    action_allowed: bool
+    decision: Literal["ALLOW", "BLOCK", "ESCALATE"]
     reason: str
     blocked: bool
+    latency_ms: float
 
 
 class DefenseResponse(BaseModel):
@@ -42,75 +58,16 @@ class DefenseResponse(BaseModel):
     layer3: Optional[Layer3Result] = None
     final_decision: Literal["allowed", "blocked"]
     reason: str
+    total_latency_ms: float
 
 
-# ============== LAYER 1: Input Classifier (Trained Model) ==============
-# TODO: Fine-tune DeBERTa model and load here
-class Layer1Classifier:
-    def __init__(self):
-        self.model = None  # Will load trained model here
-        logger.info("Layer 1: Input Classifier initialized (placeholder)")
+# ============== LAYER INSTANCES ==============
+# Initialize layer components
+canary_manager = CanaryManager()
+tool_call_auditor = ToolCallAuditor()
 
-    def classify(self, message: str) -> Layer1Result:
-        # TODO: Implement actual inference with trained model
-        # For now, placeholder logic
-        logger.info(f"Layer 1: Classifying message: {message[:50]}...")
-        return Layer1Result(
-            classification="benign",
-            confidence=0.95,
-            blocked=False
-        )
-
-
-layer1 = Layer1Classifier()
-
-
-# ============== LAYER 2: Heuristic/Rule Checks (No ML) ==============
-class Layer2Heuristics:
-    def __init__(self):
-        self.canary_tokens = ["SECRET_CANARY_TOKEN_123", "INTERNAL_SYSTEM_PROMPT"]
-        logger.info("Layer 2: Heuristic checks initialized")
-
-    def check(self, message: str) -> Layer2Result:
-        logger.info("Layer 2: Running heuristic checks")
-
-        # Canary token detection
-        canary_triggered = any(token in message for token in self.canary_tokens)
-
-        # Delimiter/role confusion detection (placeholder)
-        delimiter_violation = False  # TODO: Implement regex checks
-
-        blocked = canary_triggered or delimiter_violation
-
-        return Layer2Result(
-            canary_triggered=canary_triggered,
-            delimiter_violation=delimiter_violation,
-            blocked=blocked
-        )
-
-
-layer2 = Layer2Heuristics()
-
-
-# ============== LAYER 3: Output/Tool-Call Auditor (LLM Wrapper) ==============
-# TODO: Use Groq-hosted LLM as judge
-class Layer3Auditor:
-    def __init__(self):
-        logger.info("Layer 3: Tool-call auditor initialized (placeholder)")
-
-    def audit(self, user_intent: str, tool_call: dict) -> Layer3Result:
-        logger.info(f"Layer 3: Auditing tool call against user intent")
-
-        # TODO: Implement LLM wrapper that calls Groq API
-        # For now, placeholder logic
-        return Layer3Result(
-            action_allowed=True,
-            reason="Tool call matches user intent",
-            blocked=False
-        )
-
-
-layer3 = Layer3Auditor()
+# Classifier threshold from config
+CLASSIFIER_THRESHOLD = Config.CLASSIFIER_CONFIDENCE_THRESHOLD
 
 
 # ============== MAIN DEFENSE PIPELINE ==============
@@ -119,51 +76,101 @@ async def defend_message(request: MessageRequest):
     """
     Main endpoint: runs message through 3-layer defense pipeline
     """
+    start_time = time.time()
     logger.info(f"=== Starting defense pipeline for message ===")
 
     # Layer 1: Input classification
-    layer1_result = layer1.classify(request.message)
-    if layer1_result.blocked:
+    layer1_start = time.time()
+    classification_result = classify_input(request.message)
+    layer1_latency = (time.time() - layer1_start) * 1000
+
+    layer1_blocked = (
+        classification_result["label"] != "benign" and
+        classification_result["confidence"] > CLASSIFIER_THRESHOLD
+    )
+
+    layer1_result = Layer1Result(
+        classification=classification_result["label"],
+        confidence=classification_result["confidence"],
+        blocked=layer1_blocked,
+        latency_ms=round(layer1_latency, 2)
+    )
+
+    if layer1_blocked:
+        total_latency = (time.time() - start_time) * 1000
         return DefenseResponse(
             message=request.message,
             layer1=layer1_result,
             final_decision="blocked",
-            reason="Blocked by Layer 1: Input classifier detected injection"
+            reason=f"Blocked by Layer 1: {classification_result['label']} detected (confidence: {classification_result['confidence']}%)",
+            total_latency_ms=round(total_latency, 2)
         )
 
-    # Layer 2: Heuristic checks
-    layer2_result = layer2.check(request.message)
+    # Layer 2: Canary token leak detection
+    layer2_start = time.time()
+    canary_result = canary_manager.check_for_leaks(request.message)
+    layer2_latency = (time.time() - layer2_start) * 1000
+
+    layer2_result = Layer2Result(
+        canary_triggered=canary_result["leak_detected"],
+        delimiter_violation=False,  # TODO: Implement delimiter checks
+        blocked=canary_result["leak_detected"],
+        latency_ms=round(layer2_latency, 2)
+    )
+
     if layer2_result.blocked:
+        total_latency = (time.time() - start_time) * 1000
         return DefenseResponse(
             message=request.message,
             layer1=layer1_result,
             layer2=layer2_result,
             final_decision="blocked",
-            reason="Blocked by Layer 2: Heuristic checks detected violation"
+            reason="Blocked by Layer 2: Canary token leak detected",
+            total_latency_ms=round(total_latency, 2)
         )
 
     # Layer 3: Tool-call audit (only if tool_call present)
     layer3_result = None
     if request.tool_call and request.user_intent:
-        layer3_result = layer3.audit(request.user_intent, request.tool_call)
-        if layer3_result.blocked:
+        layer3_start = time.time()
+        audit_result = tool_call_auditor.audit(
+            user_intent=request.user_intent,
+            tool_call=request.tool_call,
+            tool_call_history=request.tool_call_history or []
+        )
+        layer3_latency = (time.time() - layer3_start) * 1000
+
+        layer3_blocked = audit_result["decision"] != "ALLOW"
+
+        layer3_result = Layer3Result(
+            decision=audit_result["decision"],
+            reason=audit_result["reason"],
+            blocked=layer3_blocked,
+            latency_ms=round(layer3_latency, 2)
+        )
+
+        if layer3_blocked:
+            total_latency = (time.time() - start_time) * 1000
             return DefenseResponse(
                 message=request.message,
                 layer1=layer1_result,
                 layer2=layer2_result,
                 layer3=layer3_result,
                 final_decision="blocked",
-                reason="Blocked by Layer 3: Tool-call auditor rejected action"
+                reason=f"Blocked by Layer 3: {audit_result['decision']} - {audit_result['reason']}",
+                total_latency_ms=round(total_latency, 2)
             )
 
     # All checks passed
+    total_latency = (time.time() - start_time) * 1000
     return DefenseResponse(
         message=request.message,
         layer1=layer1_result,
         layer2=layer2_result,
         layer3=layer3_result,
         final_decision="allowed",
-        reason="All defense checks passed"
+        reason="All defense checks passed",
+        total_latency_ms=round(total_latency, 2)
     )
 
 
@@ -182,3 +189,116 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+# ============== SIMULATION ENDPOINT ==============
+class SimulationRequest(BaseModel):
+    test_prompts: List[str]
+    expected_labels: Optional[List[str]] = None  # For evaluation
+
+
+class SimulationResult(BaseModel):
+    total_prompts: int
+    attack_success_rate: float  # % of attacks that bypassed all layers
+    false_positive_rate: float  # % of benign prompts incorrectly blocked
+    avg_latency_per_layer: Dict[str, float]
+    per_layer_stats: Dict[str, Dict]
+    results: List[Dict]
+
+
+@app.post("/simulate_attack", response_model=SimulationResult)
+async def simulate_attack(request: SimulationRequest):
+    """
+    Simulate batch attack testing for research paper evaluation
+
+    Runs a batch of test prompts through the full pipeline and outputs:
+    - Attack success rate (how many injections bypassed defense)
+    - False positive rate (benign prompts incorrectly blocked)
+    - Average latency per layer
+    - Detailed per-prompt results
+    """
+    logger.info(f"=== Starting attack simulation with {len(request.test_prompts)} prompts ===")
+
+    results = []
+    layer_latencies = {"layer1": [], "layer2": [], "layer3": []}
+    attack_bypassed = 0
+    benign_blocked = 0
+    total_attacks = 0
+    total_benign = 0
+
+    for i, prompt in enumerate(request.test_prompts):
+        # Determine if this is an attack (based on expected label or classification)
+        if request.expected_labels:
+            expected = request.expected_labels[i]
+            is_attack = expected != "benign"
+        else:
+            # Classify to determine
+            classification = classify_input(prompt)
+            is_attack = classification["label"] != "benign"
+
+        if is_attack:
+            total_attacks += 1
+        else:
+            total_benign += 1
+
+        # Run through defense pipeline
+        defense_request = MessageRequest(message=prompt)
+        response = await defend_message(defense_request)
+
+        # Track latencies
+        if response.layer1:
+            layer_latencies["layer1"].append(response.layer1.latency_ms)
+        if response.layer2:
+            layer_latencies["layer2"].append(response.layer2.latency_ms)
+        if response.layer3:
+            layer_latencies["layer3"].append(response.layer3.latency_ms)
+
+        # Track results
+        result = {
+            "prompt": prompt,
+            "is_attack": is_attack,
+            "final_decision": response.final_decision,
+            "layer1": response.layer1.dict() if response.layer1 else None,
+            "layer2": response.layer2.dict() if response.layer2 else None,
+            "layer3": response.layer3.dict() if response.layer3 else None,
+            "total_latency_ms": response.total_latency_ms
+        }
+        results.append(result)
+
+        # Count statistics
+        if is_attack and response.final_decision == "allowed":
+            attack_bypassed += 1
+        elif not is_attack and response.final_decision == "blocked":
+            benign_blocked += 1
+
+    # Calculate metrics
+    attack_success_rate = (attack_bypassed / total_attacks * 100) if total_attacks > 0 else 0
+    false_positive_rate = (benign_blocked / total_benign * 100) if total_benign > 0 else 0
+
+    avg_latency = {}
+    for layer, latencies in layer_latencies.items():
+        avg_latency[layer] = sum(latencies) / len(latencies) if latencies else 0
+
+    per_layer_stats = {
+        "layer1": {
+            "avg_latency_ms": avg_latency["layer1"],
+            "blocks": sum(1 for r in results if r["layer1"] and r["layer1"]["blocked"])
+        },
+        "layer2": {
+            "avg_latency_ms": avg_latency["layer2"],
+            "blocks": sum(1 for r in results if r["layer2"] and r["layer2"]["blocked"])
+        },
+        "layer3": {
+            "avg_latency_ms": avg_latency["layer3"],
+            "blocks": sum(1 for r in results if r["layer3"] and r["layer3"]["blocked"])
+        }
+    }
+
+    return SimulationResult(
+        total_prompts=len(request.test_prompts),
+        attack_success_rate=round(attack_success_rate, 2),
+        false_positive_rate=round(false_positive_rate, 2),
+        avg_latency_per_layer=avg_latency,
+        per_layer_stats=per_layer_stats,
+        results=results
+    )
