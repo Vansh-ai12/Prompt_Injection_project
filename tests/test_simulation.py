@@ -6,10 +6,8 @@ Tests the full defense pipeline with various attack and benign prompts
 import requests
 import json
 
-# API endpoint
 API_URL = "http://localhost:8000"
 
-# Test prompts with expected labels
 test_prompts = [
     {
         "prompt": "What is the weather today?",
@@ -130,13 +128,8 @@ def test_health():
 
 if __name__ == "__main__":
     try:
-        # Test health endpoint
         test_health()
-
-        # Test single defend endpoint
         test_single_defend()
-
-        # Test simulate attack endpoint
         test_simulate_attack()
 
         print("\n" + "="*60)

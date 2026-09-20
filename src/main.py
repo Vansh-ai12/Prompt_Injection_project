@@ -18,32 +18,27 @@ import logging
 import time
 from datetime import datetime
 
-# Import layer implementations
 from layer1_classifier import classify_input
 from layer2_canary import CanaryManager
 from layer3_auditor import ToolCallAuditor
 from config import Config
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Prompt Injection Defense System", version="1.0.0")
 
-# Initialize layer components
 canary_manager = CanaryManager()
 tool_call_auditor = ToolCallAuditor()
 
-# Classifier threshold from config
 CLASSIFIER_THRESHOLD = Config.CLASSIFIER_CONFIDENCE_THRESHOLD
 
 
-# Request/Response Models
 class MessageRequest(BaseModel):
     message: str
-    user_intent: Optional[str] = None  # Original user's stated goal
-    tool_call: Optional[dict] = None  # Proposed tool/action to execute
-    tool_call_history: Optional[List[dict]] = None  # Recent tool calls for context
+    user_intent: Optional[str] = None
+    tool_call: Optional[dict] = None
+    tool_call_history: Optional[List[dict]] = None
 
 
 class Layer1Result(BaseModel):
@@ -77,7 +72,6 @@ class DefenseResponse(BaseModel):
     total_latency_ms: float
 
 
-# ============== MAIN DEFENSE PIPELINE ==============
 @app.post("/defend", response_model=DefenseResponse)
 async def defend_message(request: MessageRequest):
     """
@@ -86,7 +80,6 @@ async def defend_message(request: MessageRequest):
     start_time = time.time()
     logger.info(f"=== Starting defense pipeline for message ===")
 
-    # Layer 1: Input classification
     layer1_start = time.time()
     classification_result = classify_input(request.message)
     layer1_latency = (time.time() - layer1_start) * 1000
@@ -113,14 +106,13 @@ async def defend_message(request: MessageRequest):
             total_latency_ms=round(total_latency, 2)
         )
 
-    # Layer 2: Canary token leak detection
     layer2_start = time.time()
     canary_result = canary_manager.check_for_leaks(request.message)
     layer2_latency = (time.time() - layer2_start) * 1000
 
     layer2_result = Layer2Result(
         canary_triggered=canary_result["leak_detected"],
-        delimiter_violation=False,  # TODO: Implement delimiter checks
+        delimiter_violation=False,
         blocked=canary_result["leak_detected"],
         latency_ms=round(layer2_latency, 2)
     )
@@ -136,7 +128,6 @@ async def defend_message(request: MessageRequest):
             total_latency_ms=round(total_latency, 2)
         )
 
-    # Layer 3: Tool-call audit (only if tool_call present)
     layer3_result = None
     if request.tool_call and request.user_intent:
         layer3_start = time.time()
@@ -168,7 +159,6 @@ async def defend_message(request: MessageRequest):
                 total_latency_ms=round(total_latency, 2)
             )
 
-    # All checks passed
     total_latency = (time.time() - start_time) * 1000
     return DefenseResponse(
         message=request.message,
@@ -181,16 +171,15 @@ async def defend_message(request: MessageRequest):
     )
 
 
-# ============== SIMULATION ENDPOINT ==============
 class SimulationRequest(BaseModel):
     test_prompts: List[str]
-    expected_labels: Optional[List[str]] = None  # For evaluation
+    expected_labels: Optional[List[str]] = None
 
 
 class SimulationResult(BaseModel):
     total_prompts: int
-    attack_success_rate: float  # % of attacks that bypassed all layers
-    false_positive_rate: float  # % of benign prompts incorrectly blocked
+    attack_success_rate: float
+    false_positive_rate: float
     avg_latency_per_layer: Dict[str, float]
     per_layer_stats: Dict[str, Dict]
     results: List[Dict]
@@ -217,12 +206,10 @@ async def simulate_attack(request: SimulationRequest):
     total_benign = 0
 
     for i, prompt in enumerate(request.test_prompts):
-        # Determine if this is an attack (based on expected label or classification)
         if request.expected_labels:
             expected = request.expected_labels[i]
             is_attack = expected != "benign"
         else:
-            # Classify to determine
             classification = classify_input(prompt)
             is_attack = classification["label"] != "benign"
 
@@ -231,11 +218,9 @@ async def simulate_attack(request: SimulationRequest):
         else:
             total_benign += 1
 
-        # Run through defense pipeline
         defense_request = MessageRequest(message=prompt)
         response = await defend_message(defense_request)
 
-        # Track latencies
         if response.layer1:
             layer_latencies["layer1"].append(response.layer1.latency_ms)
         if response.layer2:
@@ -243,7 +228,6 @@ async def simulate_attack(request: SimulationRequest):
         if response.layer3:
             layer_latencies["layer3"].append(response.layer3.latency_ms)
 
-        # Track results
         result = {
             "prompt": prompt,
             "is_attack": is_attack,
@@ -255,13 +239,11 @@ async def simulate_attack(request: SimulationRequest):
         }
         results.append(result)
 
-        # Count statistics
         if is_attack and response.final_decision == "allowed":
             attack_bypassed += 1
         elif not is_attack and response.final_decision == "blocked":
             benign_blocked += 1
 
-    # Calculate metrics
     attack_success_rate = (attack_bypassed / total_attacks * 100) if total_attacks > 0 else 0
     false_positive_rate = (benign_blocked / total_benign * 100) if total_benign > 0 else 0
 

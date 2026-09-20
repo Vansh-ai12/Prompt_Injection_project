@@ -59,10 +59,8 @@ class ToolCallAuditor:
                 - decision: "ALLOW", "BLOCK", or "ESCALATE"
                 - reason: One-line explanation
         """
-        # Prepare context with history
         history_context = self._format_history(tool_call_history or [])
 
-        # Build the audit prompt
         prompt = self._build_audit_prompt(
             user_intent=user_intent,
             tool_call=tool_call,
@@ -70,7 +68,6 @@ class ToolCallAuditor:
         )
 
         try:
-            # Call Groq API
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -83,13 +80,12 @@ class ToolCallAuditor:
                         "content": prompt
                     }
                 ],
-                temperature=0.1,  # Low temperature for consistent decisions
+                temperature=0.1,
                 max_tokens=256
             )
 
             decision_text = response.choices[0].message.content.strip()
 
-            # Parse the decision
             decision = self._parse_decision(decision_text)
 
             logger.info(f"Layer 3 audit: {decision['decision']} - {decision['reason']}")
@@ -98,7 +94,6 @@ class ToolCallAuditor:
 
         except Exception as e:
             logger.error(f"Error in Layer 3 audit: {e}")
-            # Fail open - allow but log error
             return {
                 "decision": "ALLOW",
                 "reason": f"Audit error (allowing): {str(e)}"
@@ -168,7 +163,6 @@ Respond in format: DECISION: [ALLOW/BLOCK/ESCALATE] | Reason: [explanation]"""
         """Parse the LLM response into structured decision"""
         response_text = response_text.strip()
 
-        # Try to extract decision and reason
         if "DECISION:" in response_text:
             parts = response_text.split("DECISION:")[1].strip()
             if "|" in parts:
@@ -179,12 +173,10 @@ Respond in format: DECISION: [ALLOW/BLOCK/ESCALATE] | Reason: [explanation]"""
                 decision = parts.split()[0].upper()
                 reason = response_text
         else:
-            # Fallback parsing
             words = response_text.split()
             decision = words[0].upper() if words else "ESCALATE"
             reason = response_text
 
-        # Validate decision
         if decision not in ["ALLOW", "BLOCK", "ESCALATE"]:
             decision = "ESCALATE"
             reason = f"Unclear decision format ({reason})"
@@ -195,7 +187,6 @@ Respond in format: DECISION: [ALLOW/BLOCK/ESCALATE] | Reason: [explanation]"""
         }
 
 
-# Singleton instance
 _auditor = None
 
 

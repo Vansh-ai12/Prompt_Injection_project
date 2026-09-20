@@ -30,7 +30,7 @@ class CanaryManager:
         """
         self.token_length = token_length
         self.num_tokens = num_tokens
-        self.active_canaries: Dict[str, dict] = {}  # token -> metadata
+        self.active_canaries: Dict[str, dict] = {}
         self.detected_leaks: List[dict] = []
 
     def generate_canary(self) -> str:
@@ -58,15 +58,12 @@ class CanaryManager:
             token = self.generate_canary()
             canaries.append(token)
 
-            # Store metadata
             self.active_canaries[token] = {
                 "position": i,
                 "injected_at": datetime.now().isoformat(),
                 "token": token
             }
 
-        # Embed canaries in system prompt
-        # We'll add them as hidden comments or special markers
         canary_section = "\n<!-- SYSTEM_CANARY_TOKENS: " + ", ".join(canaries) + " -->\n"
         augmented_prompt = canary_section + system_prompt
 
@@ -126,7 +123,6 @@ class CanaryManager:
         Returns:
             dict with leak_detected (bool) and details
         """
-        # Convert tool call to string for scanning
         tool_call_str = str(tool_call)
         return self.check_for_leaks(tool_call_str)
 
@@ -150,7 +146,6 @@ class CanaryManager:
         logger.info("Cleared leak history")
 
 
-# Singleton instance for use across the application
 _canary_manager = None
 
 
