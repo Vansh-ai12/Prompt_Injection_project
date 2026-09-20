@@ -13,3 +13,4 @@ seaborn==0.13.2
 matplotlib==3.9.2
 supabase==2.5.1
 numpy==1.26.4
+requests==2.31.0

@@ -2,7 +2,7 @@
 Layer 1: Input Classifier (Trained Model)
 Inference wrapper for the trained prompt injection classifier
 
-Uses distilbert-base-uncased or deberta-v3-small for lightweight inference.
+Uses microsoft/deberta-v3-base for lightweight inference.
 Runs on CPU - no GPU required for inference.
 
 Classes:
@@ -39,8 +39,8 @@ class InputClassifier:
         if not model_path.exists():
             raise FileNotFoundError(
                 f"Model not found at {model_path}\n"
-                f"Please train the model using notebooks/train_classifier.ipynb in Google Colab,\n"
-                f"download the zip file, extract it, and place it in the models/classifier/ directory."
+                f"Please run: python setup.py to download DEBERTa-v3-base\n"
+                f"Or train the model using notebooks/train_classifier.ipynb in Google Colab"
             )
 
         device = torch.device("cpu")
@@ -55,7 +55,7 @@ class InputClassifier:
         except Exception as e:
             try:
                 from peft import PeftModel
-                base_model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased")
+                base_model = AutoModelForSequenceClassification.from_pretrained("microsoft/deberta-v3-base")
                 self._model = PeftModel.from_pretrained(base_model, model_path)
                 print("Loaded model as PEFT/LoRA model")
             except ImportError:
