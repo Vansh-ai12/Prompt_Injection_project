@@ -2,6 +2,9 @@
 Layer 1: Inference Wrapper
 Provides classify_input(text) function for the FastAPI pipeline
 
+This loads a model trained in Google Colab and downloaded locally.
+The model runs on CPU (no GPU required for inference).
+
 Usage:
     from src.layer1.inference import classify_input
     result = classify_input("Ignore all previous instructions...")
@@ -31,23 +34,59 @@ class InputClassifier:
         """Load model and tokenizer (singleton pattern)"""
         model_path = Path(model_path)
         if not model_path.exists():
-            raise FileNotFoundError(f"Model not found at {model_path}")
+            raise FileNotFoundError(
+                f"Model not found at {model_path}\n"
+                f"Please train the model using src/layer1/train_colab.ipynb in Google Colab,\n"
+                f"download the zip file, extract it, and place it in the models/saved/classifier/ directory."
+            )
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Use CPU for inference (no GPU required)
+        device = torch.device("cpu")
 
         print(f"Loading classifier from {model_path}")
+        print(f"Using device: {device} (CPU inference)")
+
+        # Load tokenizer
         self._tokenizer = AutoTokenizer.from_pretrained(model_path)
-        self._model = AutoModelForSequenceClassification.from_pretrained(model_path)
+
+        # Load model - handle both regular and LoRA models
+        try:
+            # Try loading as a regular model first
+            self._model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        except Exception as e:
+            # If that fails, try loading as a PEFT/LoRA model
+            try:
+                from peft import PeftModel
+                base_model = AutoModelForSequenceClassification.from_pretrained("microsoft/deberta-v3-base")
+                self._model = PeftModel.from_pretrained(base_model, model_path)
+                print("Loaded model as PEFT/LoRA model")
+            except ImportError:
+                print("Warning: peft not installed, trying to load as regular model")
+                self._model = AutoModelForSequenceClassification.from_pretrained(model_path)
+
         self._model.to(device)
         self._model.eval()
 
         # Load label mapping
-        with open(model_path / "label_map.json") as f:
-            self._label_map = json.load(f)
+        label_map_path = model_path / "label_map.json"
+        if not label_map_path.exists():
+            # Fallback to default label mapping
+            print("Warning: label_map.json not found, using default mapping")
+            self._label_map = {
+                "benign": 0,
+                "direct_injection": 1,
+                "indirect_injection": 2,
+                "jailbreak": 3
+            }
+        else:
+            with open(label_map_path) as f:
+                self._label_map = json.load(f)
+
         self._id2label = {v: k for k, v in self._label_map.items()}
 
         self._device = device
         print(f"Classifier loaded on {device} with {len(self._label_map)} classes")
+        print(f"Label mapping: {self._label_map}")
 
     def classify(self, text: str) -> dict:
         """

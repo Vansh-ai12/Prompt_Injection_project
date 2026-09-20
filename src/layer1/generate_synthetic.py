@@ -9,8 +9,13 @@ This script generates ~500 synthetic injection examples across several attack st
 - Role confusion attacks
 - Multi-turn injection scenarios
 
-Usage:
+Can be run locally or in Google Colab.
+
+Usage (local):
     python src/layer1/generate_synthetic.py --num_examples 500 --output data/processed/synthetic_injections.json
+
+Usage (Colab):
+    Run the generate_synthetic_colab.ipynb notebook
 """
 
 import os
@@ -21,11 +26,18 @@ from typing import List, Dict
 import time
 from dotenv import load_dotenv
 
-from groq import Groq
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+    print("Warning: groq package not installed. Install with: pip install groq")
 
 
 class SyntheticInjectionGenerator:
     def __init__(self, api_key: str):
+        if not GROQ_AVAILABLE:
+            raise ImportError("groq package is required. Install with: pip install groq")
         self.client = Groq(api_key=api_key)
         self.attack_templates = self._load_attack_templates()
 

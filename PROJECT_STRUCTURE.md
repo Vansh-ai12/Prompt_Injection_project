@@ -6,14 +6,15 @@ Prompt_Injection_project/
 │   ├── raw/                      # Downloaded datasets (deepset, JailbreakBench, synthetic)
 │   └── processed/                # Preprocessed training/validation/test splits
 ├── models/
-│   ├── checkpoints/              # Training checkpoints during fine-tuning
-│   └── saved/                    # Final trained models (classifier, etc.)
+│   └── saved/                    # Final trained models (downloaded from Colab)
+│       └── classifier/           # DeBERTa classifier trained in Colab
 ├── src/
 │   ├── layer1/                   # Input Classifier (Trained Model)
-│   │   ├── train.py              # Fine-tuning script for DeBERTa
+│   │   ├── train_colab.ipynb     # Google Colab training notebook (T4 GPU)
+│   │   ├── generate_synthetic_colab.ipynb  # Colab synthetic data generation
 │   │   ├── evaluate.py           # Evaluation script (precision/recall/F1)
-│   │   ├── inference.py          # classify_input(text) function
-│   │   └── generate_synthetic.py # Script to generate synthetic injections via Groq
+│   │   ├── inference.py          # classify_input(text) function (CPU inference)
+│   │   └── generate_synthetic.py # Local synthetic data generation script
 │   ├── layer2/                   # Canary Token Leak Detector (Pure Code)
 │   │   ├── canary_manager.py     # Inject/detect canary tokens
 │   │   └── leak_detector.py      # Scan outputs for leaks
@@ -38,7 +39,9 @@ Prompt_Injection_project/
 - **Model**: DeBERTa-v3-base fine-tuned for 4-class classification
 - **Classes**: benign, direct_injection, indirect_injection, jailbreak
 - **Output**: {label, confidence (0-100)}
-- **Training**: Uses deepset/prompt-injections, JailbreakBench, synthetic Groq-generated data
+- **Training**: Done in Google Colab (free tier T4 GPU) via `train_colab.ipynb`
+- **Inference**: Runs on CPU locally (no GPU required)
+- **Data**: Uses deepset/prompt-injections, JailbreakBench, synthetic Groq-generated data
 
 ### Layer 2: Canary Token Leak Detector (PURE CODE)
 - **Function**: Inject random canaries into system prompts, scan outputs for leaks
@@ -59,3 +62,21 @@ Prompt_Injection_project/
 4. If BLOCK/ESCALATE → Block or escalate
 5. Layer 2 continuously scans all outputs for canary leaks
 6. Everything logged to Supabase with timestamp, layer, verdict, latency
+
+## Key Design Decisions
+
+### Colab Training
+- Training done in Google Colab free tier (T4 GPU, ~16GB VRAM)
+- No local GPU required for training
+- Frequent checkpointing (every 500 steps) to handle Colab session disconnections
+- Model saved to Google Drive, then downloaded for local use
+
+### CPU Inference
+- Trained model runs on CPU locally for the defense pipeline
+- Handles both regular and LoRA/PEFT models
+- No GPU required for inference
+
+### Data Generation
+- Synthetic data can be generated in Colab or locally
+- Uses Groq API for generating diverse injection examples
+- ~500 examples across 5 attack styles
