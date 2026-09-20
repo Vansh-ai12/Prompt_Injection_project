@@ -2,6 +2,12 @@
 
 ## ONE COMMAND TO RUN EVERYTHING
 
+**PowerShell (Windows):**
+```powershell
+python setup.py; python run_simulation.py
+```
+
+**Bash (macOS/Linux):**
 ```bash
 python setup.py && python run_simulation.py
 ```
