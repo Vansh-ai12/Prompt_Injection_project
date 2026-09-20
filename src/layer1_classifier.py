@@ -1,14 +1,15 @@
 """
-Layer 1: Inference Wrapper
-Provides classify_input(text) function for the FastAPI pipeline
+Layer 1: Input Classifier (Trained Model)
+Inference wrapper for the trained prompt injection classifier
 
-This loads a model trained in Google Colab and downloaded locally.
-The model runs on CPU (no GPU required for inference).
+Uses distilbert-base-uncased or deberta-v3-small for lightweight inference.
+Runs on CPU - no GPU required for inference.
 
-Usage:
-    from src.layer1.inference import classify_input
-    result = classify_input("Ignore all previous instructions...")
-    # Returns: {"label": "direct_injection", "confidence": 98.5}
+Classes:
+- benign: Normal user queries
+- direct_injection: Explicit injection attempts in user message
+- indirect_injection: Injection via retrieved documents/context
+- jailbreak: Attempts to bypass safety constraints
 """
 
 import json
@@ -18,13 +19,15 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 
 class InputClassifier:
+    """Lightweight classifier for prompt injection detection"""
+
     _instance = None
     _model = None
     _tokenizer = None
     _label_map = None
     _id2label = None
 
-    def __new__(cls, model_path="models/saved/classifier"):
+    def __new__(cls, model_path="models/classifier"):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._load_model(model_path)
@@ -36,8 +39,8 @@ class InputClassifier:
         if not model_path.exists():
             raise FileNotFoundError(
                 f"Model not found at {model_path}\n"
-                f"Please train the model using src/layer1/train_colab.ipynb in Google Colab,\n"
-                f"download the zip file, extract it, and place it in the models/saved/classifier/ directory."
+                f"Please train the model using notebooks/train_classifier.ipynb in Google Colab,\n"
+                f"download the zip file, extract it, and place it in the models/classifier/ directory."
             )
 
         # Use CPU for inference (no GPU required)
@@ -57,7 +60,7 @@ class InputClassifier:
             # If that fails, try loading as a PEFT/LoRA model
             try:
                 from peft import PeftModel
-                base_model = AutoModelForSequenceClassification.from_pretrained("microsoft/deberta-v3-base")
+                base_model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased")
                 self._model = PeftModel.from_pretrained(base_model, model_path)
                 print("Loaded model as PEFT/LoRA model")
             except ImportError:
@@ -164,13 +167,13 @@ class InputClassifier:
 _classifier = None
 
 
-def classify_input(text: str, model_path: str = "models/saved/classifier") -> dict:
+def classify_input(text: str, model_path: str = "models/classifier") -> dict:
     """
     Main inference function for the pipeline
 
     Args:
         text: Input text to classify
-        model_path: Path to trained model (default: models/saved/classifier)
+        model_path: Path to trained model (default: models/classifier)
 
     Returns:
         dict with keys:
@@ -190,7 +193,7 @@ def classify_input(text: str, model_path: str = "models/saved/classifier") -> di
     return _classifier.classify(text)
 
 
-def classify_input_batch(texts: list, model_path: str = "models/saved/classifier") -> list:
+def classify_input_batch(texts: list, model_path: str = "models/classifier") -> list:
     """
     Batch classification function
 

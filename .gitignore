@@ -15,11 +15,9 @@ ENV/
 *.bin
 *.safetensors
 models/
-checkpoints/
 
 # Data
 data/
-datasets/
 *.csv
 *.json
 *.parquet

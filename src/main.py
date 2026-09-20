@@ -1,3 +1,16 @@
+"""
+FastAPI application for the 3-layer prompt injection defense system
+
+Wires together:
+- Layer 1: Input classifier (trained model)
+- Layer 2: Canary token leak detector (pure code)
+- Layer 3: Tool-call intent auditor (Groq LLM wrapper)
+"""
+
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent))
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Literal, List, Dict
@@ -5,21 +18,24 @@ import logging
 import time
 from datetime import datetime
 
+# Import layer implementations
+from layer1_classifier import classify_input
+from layer2_canary import CanaryManager
+from layer3_auditor import ToolCallAuditor
+from config import Config
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Prompt Injection Defense System", version="0.1.0")
+app = FastAPI(title="Prompt Injection Defense System", version="1.0.0")
 
-# Import layer implementations
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent))
+# Initialize layer components
+canary_manager = CanaryManager()
+tool_call_auditor = ToolCallAuditor()
 
-from src.layer1.inference import classify_input
-from src.layer2.canary_manager import CanaryManager
-from src.layer3.auditor import ToolCallAuditor
-from src.common.config import Config
+# Classifier threshold from config
+CLASSIFIER_THRESHOLD = Config.CLASSIFIER_CONFIDENCE_THRESHOLD
 
 
 # Request/Response Models
@@ -59,15 +75,6 @@ class DefenseResponse(BaseModel):
     final_decision: Literal["allowed", "blocked"]
     reason: str
     total_latency_ms: float
-
-
-# ============== LAYER INSTANCES ==============
-# Initialize layer components
-canary_manager = CanaryManager()
-tool_call_auditor = ToolCallAuditor()
-
-# Classifier threshold from config
-CLASSIFIER_THRESHOLD = Config.CLASSIFIER_CONFIDENCE_THRESHOLD
 
 
 # ============== MAIN DEFENSE PIPELINE ==============
@@ -172,23 +179,6 @@ async def defend_message(request: MessageRequest):
         reason="All defense checks passed",
         total_latency_ms=round(total_latency, 2)
     )
-
-
-@app.get("/")
-async def root():
-    return {
-        "message": "Prompt Injection Defense System",
-        "layers": [
-            "Layer 1: Input Classifier (Trained Model)",
-            "Layer 2: Heuristic Checks (No ML)",
-            "Layer 3: Tool-Call Auditor (LLM Wrapper)"
-        ]
-    }
-
-
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
 
 
 # ============== SIMULATION ENDPOINT ==============
@@ -302,3 +292,26 @@ async def simulate_attack(request: SimulationRequest):
         per_layer_stats=per_layer_stats,
         results=results
     )
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Prompt Injection Defense System",
+        "version": "1.0.0",
+        "layers": [
+            "Layer 1: Input Classifier (Trained Model - distilbert/deberta-small)",
+            "Layer 2: Canary Token Leak Detector (Pure Code)",
+            "Layer 3: Tool-Call Intent Auditor (Groq LLM Wrapper - llama-3.1-8b-instant)"
+        ]
+    }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host=Config.API_HOST, port=Config.API_PORT)

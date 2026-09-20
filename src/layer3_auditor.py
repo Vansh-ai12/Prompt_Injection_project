@@ -4,6 +4,8 @@ LLM wrapper using Groq API to validate tool calls against user intent
 
 This is multi-step aware - looks at recent tool-call history (N=3) to catch
 chained/salami-sliced attacks, not just single actions in isolation.
+
+Uses llama-3.1-8b-instant for speed and low cost.
 """
 
 import os
@@ -12,7 +14,7 @@ from datetime import datetime
 import logging
 
 from groq import Groq
-from src.common.config import Config
+from src.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ class ToolCallAuditor:
 
         Args:
             api_key: Groq API key (default: from Config)
-            model: Groq model to use (default: from Config)
+            model: Groq model to use (default: from Config, defaults to llama-3.1-8b-instant)
         """
         self.api_key = api_key or Config.GROQ_API_KEY
         self.model = model or Config.GROQ_MODEL
@@ -194,7 +196,7 @@ Respond in format: DECISION: [ALLOW/BLOCK/ESCALATE] | Reason: [explanation]"""
 
 
 # Singleton instance
-_auditor: Optional[ToolCallAuditor] = None
+_auditor = None
 
 
 def get_auditor() -> ToolCallAuditor:

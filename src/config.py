@@ -1,6 +1,5 @@
 """
-Common configuration module
-Centralizes configuration for all layers
+Configuration settings for the prompt injection defense system
 """
 
 import os
@@ -12,16 +11,16 @@ load_dotenv()
 
 
 class Config:
-    """Configuration class for the prompt injection defense system"""
+    """Configuration class"""
 
     # Paths
-    PROJECT_ROOT = Path(__file__).parent.parent.parent
+    PROJECT_ROOT = Path(__file__).parent.parent
     DATA_DIR = PROJECT_ROOT / "data"
     MODELS_DIR = PROJECT_ROOT / "models"
     LOGS_DIR = PROJECT_ROOT / "logs"
 
     # Layer 1: Classifier
-    CLASSIFIER_MODEL_PATH = os.getenv("CLASSIFIER_MODEL_PATH", str(MODELS_DIR / "saved" / "classifier"))
+    CLASSIFIER_MODEL_PATH = os.getenv("CLASSIFIER_MODEL_PATH", str(MODELS_DIR / "classifier"))
     CLASSIFIER_CONFIDENCE_THRESHOLD = float(os.getenv("CLASSIFIER_CONFIDENCE_THRESHOLD", "70.0"))
 
     # Layer 2: Canary tokens
@@ -30,7 +29,7 @@ class Config:
 
     # Layer 3: Groq Auditor
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")  # Using smaller/faster model
     TOOL_CALL_HISTORY_LENGTH = int(os.getenv("TOOL_CALL_HISTORY_LENGTH", "3"))
 
     # Supabase (for logging)

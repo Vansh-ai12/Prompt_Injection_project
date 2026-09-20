@@ -10,7 +10,7 @@ Functions:
 
 import secrets
 import string
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 import logging
 
@@ -151,7 +151,7 @@ class CanaryManager:
 
 
 # Singleton instance for use across the application
-_canary_manager: Optional[CanaryManager] = None
+_canary_manager = None
 
 
 def get_canary_manager() -> CanaryManager:
