@@ -72,9 +72,16 @@ def install_dependencies():
     pip_path = Path("venv/Scripts/pip.exe") if sys.platform == "win32" else Path("venv/bin/pip")
 
     print("Installing packages from requirements.txt...")
-    run_command(f"{pip_path} install -r requirements.txt", "Installing dependencies")
+    result = run_command(f"{pip_path} install -r requirements.txt", "Installing dependencies")
+
+    if not result:
+        print("\nERROR: Failed to install dependencies")
+        print("Please try manually:")
+        print(f"  {pip_path} install -r requirements.txt")
+        return False
 
     print("\nPackages installed successfully")
+    return True
 
 
 def setup_env_file():
@@ -126,18 +133,23 @@ def check_model_files():
 
     if not model_path.exists():
         print(f"Model directory not found: {model_path}")
-        print("\nTo set up the model:")
-        print("1. Open notebooks/train_classifier.ipynb in Google Colab")
-        print("2. Run all cells to train the model (~30-45 minutes)")
-        print("3. Download the generated zip file")
-        print("4. Extract it to: models/classifier/")
-        print("\nRequired files in models/classifier/:")
-        print("  - config.json")
-        print("  - pytorch_model.bin or model.safetensors")
-        print("  - tokenizer.json")
-        print("  - tokenizer_config.json")
-        print("  - label_map.json")
-        return False
+        print("\nWould you like to download DEBERTa-v3-base from HuggingFace? (recommended)")
+        response = input("Download now? (y/n): ").lower()
+        if response == 'y':
+            return setup_deberta_model()
+        else:
+            print("\nTo set up the model manually:")
+            print("1. Open notebooks/train_classifier.ipynb in Google Colab")
+            print("2. Run all cells to train the model (~30-45 minutes)")
+            print("3. Download the generated zip file")
+            print("4. Extract it to: models/classifier/")
+            print("\nRequired files in models/classifier/:")
+            print("  - config.json")
+            print("  - pytorch_model.bin or model.safetensors")
+            print("  - tokenizer.json")
+            print("  - tokenizer_config.json")
+            print("  - label_map.json")
+            return False
 
     required_files = ["config.json", "pytorch_model.bin", "model.safetensors", "tokenizer.json", "tokenizer_config.json", "label_map.json"]
     missing_files = []
@@ -148,8 +160,13 @@ def check_model_files():
 
     if missing_files:
         print(f"Model directory exists but missing files: {missing_files}")
-        print("\nPlease complete the Colab training step and extract the model correctly")
-        return False
+        print("\nWould you like to download DEBERTa-v3-base from HuggingFace? (recommended)")
+        response = input("Download now? (y/n): ").lower()
+        if response == 'y':
+            return setup_deberta_model()
+        else:
+            print("\nPlease complete the Colab training step and extract the model correctly")
+            return False
 
     print("Model files found and appear complete")
     return True
@@ -178,7 +195,10 @@ def setup_deberta_model():
         model_path.mkdir(parents=True, exist_ok=True)
 
         print("Downloading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(
+    model_name,
+    use_fast=False
+)
         tokenizer.save_pretrained(model_path)
 
         print("Downloading model...")

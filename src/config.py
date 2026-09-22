@@ -24,7 +24,7 @@ class Config:
     NUM_CANARY_TOKENS = int(os.getenv("NUM_CANARY_TOKENS", "5"))
 
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
     TOOL_CALL_HISTORY_LENGTH = int(os.getenv("TOOL_CALL_HISTORY_LENGTH", "3"))
 
     SUPABASE_URL = os.getenv("SUPABASE_URL")
