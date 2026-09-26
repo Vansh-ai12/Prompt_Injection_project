@@ -13,6 +13,13 @@ import string
 from typing import Dict, List
 from datetime import datetime
 import logging
+from layer2_guards import (
+    check_obfuscation,
+    check_fake_delimiters,
+    check_known_phrases,
+    check_extraction_probe,
+    run_input_guards
+)
 
 logger = logging.getLogger(__name__)
 

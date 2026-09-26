@@ -6,54 +6,58 @@ This system solves the problem of prompt injection attacks against AI cybersecur
 
 ## System Overview
 
-The defense pipeline consists of three independent layers that process each incoming message sequentially:
+The defense pipeline consists of three layers processing each incoming request:
+
+- **Layer 1 (ML Classifier)** and **Layer 2 (5-Guard Input Fusion Engine)** evaluate every incoming prompt in **parallel** as dual input-side defense gates.
+- **Layer 3 (Tool-Call Auditor)** validates proposed tool calls against user intent.
+- **Layer 2 (Guard 5 Canary Manager)** monitors model output text and tool payloads for data leakage.
 
 ```
-User Message → Layer 1 → Layer 2 → Layer 3 → Final Decision
-                  (Classifier) (Canary) (Auditor)   (Allow/Block)
+                      Incoming User Request
+                                │
+        ┌───────────────────────┴───────────────────────┐
+        │                                               │
+        ▼                                               ▼
+┌───────────────────────────────┐              ┌───────────────────────────────┐
+│ LAYER 1: ML Classifier        │              │ LAYER 2: 5-Guard Input Engine │
+│ (DeBERTa / DistilBERT)        │              │ (Guards 1-4, Pure Python)     │
+│ • Predicted class &           │              │ • Guard 1: Obfuscation        │
+│   confidence                  │              │ • Guard 2: Fake Delimiters    │
+│                               │              │ • Guard 3: Known Phrases      │
+│                               │              │ • Guard 4: Extraction Probes  │
+└───────────────┬───────────────┘              └───────────────┬───────────────┘
+                │                                              │
+                └───────────────────────┬──────────────────────┘
+                                        │
+                         Decision Fusion Rules (A/B/C/D)
+                           ├── Rule A: Standalone L2 (score >= 50)  ──► BLOCK
+                           ├── Rule B: Standalone L1 (conf >= 70%)  ──► BLOCK
+                           ├── Rule C: Cross-Layer Fusion (L1 45%+ & L2 25+) ──► BLOCK
+                           └── Rule D: Clean                        ──► ALLOW to L3 & Model
+                                                                            │
+                                                                            ▼
+                                                               ┌─────────────────────────┐
+                                                               │ LAYER 2: Guard 5 Canary │
+                                                               │ Output Leak Detection   │
+                                                               └─────────────────────────┘
 ```
 
-Each layer can independently block the request. If any layer blocks, the message is rejected immediately and the remaining layers are not executed.
+## Fusion Decision Rules (src/main.py)
 
-## Step-by-Step Message Flow
+- **Rule A (Standalone Layer 2 Block)**: Triggered when Layer 2 combined score $\ge 50.0$.
+- **Rule B (Standalone Layer 1 Block)**: Triggered when Layer 1 predicts an attack class with confidence $\ge 70.0\%$.
+- **Rule C (Cross-Layer Fusion Block)**: Triggered when Layer 1 predicts an attack class with moderate confidence ($\ge 45.0\%$) **AND** Layer 2 detects moderate risk score ($\ge 25.0$). Catches borderline injections that neither layer would block independently.
+- **Rule D (Allow)**: Clean request allowed to proceed to Layer 3 intent auditor and downstream model.
 
-When a message comes in:
+## Layer 2: 5-Guard System Details
 
-1. **Layer 1 (Input Classifier)**: The message is first analyzed by a trained machine learning model that classifies it as "benign" or one of three attack types. If the model detects an injection with high confidence, the message is blocked immediately.
+Layer 2 is a pure Python system (zero ML runtime overhead) composed of 5 specialized guards:
 
-2. **Layer 2 (Canary Token Detector)**: If Layer 1 allows the message, it's checked for data leakage. The system looks for special "canary tokens" (hidden marker strings) that were secretly planted in the system's instructions. If these tokens appear in the message, it means secret data leaked and the message is blocked.
-
-3. **Layer 3 (Tool-Call Auditor)**: If the message contains a proposed tool call (like "run a scan" or "delete a file"), this layer validates whether that action makes sense given what the user originally asked for. It uses an external AI (via Groq API) to judge if the tool call aligns with the user's stated intent. If the tool call seems suspicious or unrelated to the user's goal, it's blocked.
-
-4. **Final Decision**: If all three layers pass, the message is allowed through and the AI can process it normally.
-
-## Layer Details
-
-### Layer 1: Input Classifier (Trained Model)
-
-**What it is:** A machine learning model trained to recognize prompt injection patterns.
-
-**What decides pass/fail:** The model classifies messages into four categories:
-- benign: Normal user queries
-- direct_injection: Explicit injection attempts like "ignore all previous instructions"
-- indirect_injection: Injection hidden in retrieved documents or context
-- jailbreak: Attempts to bypass safety constraints
-
-If the classification is not "benign" AND the confidence score is above a threshold (default 70%), the message is blocked.
-
-**What happens next:** If blocked, the request is rejected immediately. If allowed, the message proceeds to Layer 2.
-
-**Model type:** This is a **trained model**—we fine-tuned distilbert-base-uncased (66M parameters) on injection/benign examples using Google Colab. This represents our machine learning contribution to the research.
-
-### Layer 2: Canary Token Leak Detector (Pure Code)
-
-**What it is:** A code-based check that detects data leakage using hidden marker strings.
-
-**What decides pass/fail:** The system injects random "canary tokens" (secret strings like "aB3x9ZkL2m") into the system's internal instructions. When a message comes in, Layer 2 scans it to see if any of these secret tokens appear. If a canary token is found in the message, it means internal data leaked and the message is blocked.
-
-**What happens next:** If blocked, the request is rejected. If allowed, the message proceeds to Layer 3.
-
-**Model type:** This is **pure code**—no machine learning involved. It's just string matching and simple logic. This represents our systems engineering contribution.
+1. **Guard 1 (Obfuscation & Encoding Decoder)**: Detects and recursively decodes (up to depth 2) Base64, Hex, URL-encoding, ROT13, and Leetspeak. Flags `decoded_phrase_match` if decoded content contains an attack phrase.
+2. **Guard 2 (Fake Delimiter / System-Tag Detector)**: Uses regex to detect fake chat template tags (`<system>`, `[INST]`, `<<SYS>>`, `<|im_start|>`, `###`, `{{...}}`).
+3. **Guard 3 (Known Attack Phrase Matcher)**: Matches raw input text against `data/attack_phrases.json` using exact substring matching (1.0 confidence) and `difflib.SequenceMatcher` fuzzy matching ($\ge 0.65$ ratio).
+4. **Guard 4 (Information-Extraction Probe Detector)**: Pattern-matches prompt extraction probes ("what are your instructions", "reveal your system prompt", etc.).
+5. **Guard 5 (Canary Token Leak Detector)**: Monitors output text and tool payloads for verbatim leakage of planted secret canary tokens (`CanaryManager`).
 
 ### Layer 3: Tool-Call Intent Auditor (LLM Wrapper)
 
@@ -168,3 +172,92 @@ This system contributes three distinct components to the research:
 3. **Prompt Engineering:** An LLM wrapper (Layer 3) that cleverly uses existing models for intent validation
 
 The combination of these three approaches—trained model, pure code, and LLM wrapper—provides defense-in-depth against prompt injection attacks in cybersecurity copilots.
+
+---
+
+## Layer 3: Security Overhaul — Five Reliability Fixes
+
+The original Layer 3 auditor had five security weaknesses that have been addressed in the hardened edition ([`src/layer3_auditor.py`](src/layer3_auditor.py)).
+
+### Fix 1 — Fail Closed (Highest Priority)
+
+**Old behaviour:** Any Groq API exception (timeout, rate limit, network error) defaulted to `ALLOW`.  
+**New behaviour:** All exceptions default to `ESCALATE` with a mandatory `ERROR`-level log entry tagged `LAYER 3 FAILURE - FAILING CLOSED`.  A security control that cannot complete must **never** default to approval.
+
+### Fix 2 — Intent Verification Before Auditing
+
+**Gap:** The auditor blindly trusted the `user_intent` string passed in, with no check that it accurately reflected what the user actually typed. An indirect injection could corrupt the intent summary upstream, making the entire audit judge against a false baseline.
+
+**Solution:** A new `verify_intent_consistency(raw_user_message, user_intent)` method fires a **separate lightweight Groq call** that asks: *"Does this derived intent conservatively reflect only what the raw message asked?"*  
+- If **inconsistent** → immediately returns `ESCALATE` **without running the tool-call audit** (no point auditing against a known-bad baseline).  
+- If `raw_user_message` is not supplied (backward compatibility) → skips this check with a `WARNING` log.
+
+### Fix 3 — Self-Consistency Voting for Borderline Cases
+
+**Gap:** A single LLM call is stochastic; the same prompt can return different answers on different runs.  
+**Solution:** When the first audit call returns `ESCALATE` or flags ambiguity, the system **automatically re-runs the same call 2 more times** (3 total) and resolves by majority vote:
+
+| Outcome | Result |
+|---|---|
+| 3/3 agree | Return that decision, `consensus: True`, `vote_count: "3/3"` |
+| 2/3 agree | Return majority decision, `consensus: True`, `vote_count: "2/3"` |
+| No majority | `ESCALATE`, `consensus: False`, `vote_count: "0/3"`, all raw votes included |
+
+Clear `ALLOW`/`BLOCK` on the first call return immediately — no extra latency for the common case.
+
+### Fix 4 — Risk-Tiered Auditing
+
+**Gap:** Every tool call received identical scrutiny regardless of its destructive potential.  
+**Solution:** Tool names are mapped to a risk tier in [`data/tool_risk_tiers.json`](data/tool_risk_tiers.json). The tier controls the audit strategy:
+
+| Tier | Audit strategy |
+|---|---|
+| **LOW** | Auto-`ALLOW` with no LLM call — unless 3+ consecutive calls to the *same* tool are detected (salami-slicing guard), in which case a full audit is triggered |
+| **MEDIUM** | Single LLM call; votes if result is ESCALATE or ambiguous |
+| **HIGH** | 3-call voting always, regardless of first-call outcome |
+| **CRITICAL** | 3-call voting **and** even a consensus `ALLOW` is downgraded to `ESCALATE` — critical actions always require human sign-off |
+
+Unknown tools default to **MEDIUM** (never LOW — fail toward more scrutiny for unknowns).
+
+### Fix 5 — Decision Logging for Calibration
+
+Every `audit()` call writes a structured record to **Supabase** (if configured) or a local **JSONL file** (`data/audit_log.jsonl`) containing: `timestamp`, `user_intent`, `tool_call`, `risk_tier`, `final_decision`, `reason`, `consensus`, `vote_count`, `intent_verified`, and an empty `ground_truth` field for later human labelling.
+
+The companion script [`scripts/audit_accuracy_report.py`](scripts/audit_accuracy_report.py) reads all labelled records and prints:
+- Overall accuracy
+- False-Allow rate (attack slipped through as ALLOW)
+- False-Block rate (benign incorrectly blocked)
+- Per-risk-tier breakdown
+- Consensus vs. no-consensus accuracy
+
+This produces a concrete evaluation artifact for the paper's results section.
+
+### Audit Decision Flow (Hardened)
+
+```
+audit(user_intent, tool_call, tool_call_history, raw_user_message)
+        │
+        ▼
+[1] Resolve risk tier (tool_risk_tiers.json)
+        │
+        ├─ LOW ──────────────────────────────────────────► Auto-ALLOW
+        │           (unless salami-slicing detected)
+        ▼
+[2] Intent verification (if raw_user_message supplied)
+        │
+        ├─ Inconsistent ──────────────────────────────────► ESCALATE
+        ▼
+[3] Tool-call LLM audit
+        │
+        ├─ MEDIUM ──► single call (re-vote if ESCALATE / ambiguous)
+        ├─ HIGH   ──► always 3-call voting
+        └─ CRITICAL─► always 3-call voting
+                │
+                ├─ ALLOW consensus + CRITICAL ────────────► downgrade to ESCALATE
+                ▼
+[4] Log decision (Supabase or local JSONL)
+        │
+        ▼
+    Return final decision dict
+    {decision, reason, risk_tier, consensus, vote_count, intent_verified}
+```
