@@ -16,7 +16,7 @@ Five reliability & security fixes applied:
 import json
 import logging
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -29,22 +29,31 @@ logger = logging.getLogger(__name__)
 # Module-level risk-tier cache
 # ---------------------------------------------------------------------------
 _RISK_TIERS: Optional[Dict[str, str]] = None
+_CACHED_TIERS_PATH: Optional[Path] = None
 
 
-def _load_risk_tiers() -> Dict[str, str]:
-    """Load (and cache) tool_risk_tiers.json."""
-    global _RISK_TIERS
-    if _RISK_TIERS is not None:
+def reset_risk_tiers_cache():
+    """Reset the cached risk tiers."""
+    global _RISK_TIERS, _CACHED_TIERS_PATH
+    _RISK_TIERS = None
+    _CACHED_TIERS_PATH = None
+
+
+def _load_risk_tiers(force_reload: bool = False) -> Dict[str, str]:
+    """Load (and cache) tool_risk_tiers.json, reloading if path changed."""
+    global _RISK_TIERS, _CACHED_TIERS_PATH
+    path: Path = Config.TOOL_RISK_TIERS_PATH
+    if not force_reload and _RISK_TIERS is not None and _CACHED_TIERS_PATH == path:
         return _RISK_TIERS
 
-    path: Path = Config.TOOL_RISK_TIERS_PATH
+    _CACHED_TIERS_PATH = path
     if path.exists():
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 raw = json.load(fh)
             # Strip meta / comment keys
             _RISK_TIERS = {k: v for k, v in raw.items() if not k.startswith("_")}
-            logger.info("Layer 3: loaded %d tool risk-tier entries", len(_RISK_TIERS))
+            logger.info("Layer 3: loaded %d tool risk-tier entries from %s", len(_RISK_TIERS), path)
         except Exception as exc:
             logger.error("Layer 3: failed to load tool_risk_tiers.json — %s; defaulting all to MEDIUM", exc)
             _RISK_TIERS = {"DEFAULT": "MEDIUM"}
@@ -438,7 +447,7 @@ class ToolCallAuditor:
         and later calibration.
         """
         record = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "user_intent": user_intent,
             "tool_call": tool_call,
             "risk_tier": risk_tier,

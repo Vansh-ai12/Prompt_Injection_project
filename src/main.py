@@ -44,6 +44,7 @@ class MessageRequest(BaseModel):
 class Layer1Result(BaseModel):
     classification: Literal["benign", "direct_injection", "indirect_injection", "jailbreak"]
     confidence: float
+    probabilities: Optional[Dict[str, float]] = None
     blocked: bool
     latency_ms: float
 
@@ -90,18 +91,32 @@ async def defend_message(request: MessageRequest):
     start_time = time.time()
     logger.info(f"=== Starting defense pipeline for message ===")
 
-    # 1. Layer 1 Classification
+    # 1. Layer 1 Classification (Runs on RAW USER MESSAGE only)
     layer1_start = time.time()
     classification_result = classify_input(request.message)
     layer1_latency = (time.time() - layer1_start) * 1000
 
     l1_class = classification_result["label"]
     l1_conf = classification_result["confidence"]
+    l1_probs = classification_result.get("probabilities")
 
-    # 2. Layer 2 Input Guards (1-4) & Canary Check (5)
+    # 2. Layer 2 Guards:
+    # - Guards 1-4 (obfuscation, fake delimiters, known phrases, extraction probes) run on INPUT text
+    # - Guard 5 (Canary Tripwire) checks OUTPUT text / tool call payloads for leaked canary tokens
     layer2_start = time.time()
     l2_input_res = run_input_guards(request.message)
-    canary_res = canary_manager.check_for_leaks(request.message)
+
+    # Check Guard 5 Canary on tool payload (output) and response/message text
+    canary_leak_detected = False
+    if request.tool_call:
+        tool_canary = canary_manager.check_tool_call_payload(request.tool_call)
+        if tool_canary.get("leak_detected"):
+            canary_leak_detected = True
+
+    msg_canary = canary_manager.check_for_leaks(request.message)
+    if msg_canary.get("leak_detected"):
+        canary_leak_detected = True
+
     layer2_latency = (time.time() - layer2_start) * 1000
 
     l2_score = l2_input_res["combined_score"]
@@ -112,14 +127,15 @@ async def defend_message(request: MessageRequest):
     layer1_result = Layer1Result(
         classification=l1_class,
         confidence=l1_conf,
+        probabilities=l1_probs,
         blocked=l1_standalone_blocked,
         latency_ms=round(layer1_latency, 2)
     )
 
     # 3. Decision Fusion Engine Logic (Exact Rule Evaluation Order)
 
-    # Guard 5 Output Canary Leak check
-    if canary_res["leak_detected"]:
+    # Guard 5 Output Canary Leak check (Triggers if tracer leaked into output/tool call)
+    if canary_leak_detected:
         total_latency = (time.time() - start_time) * 1000
         l2_res = Layer2Result(
             combined_score=l2_score,
