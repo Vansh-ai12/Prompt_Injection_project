@@ -1,3 +1,4 @@
+import argparse
 """
 Single-command attack simulation script — Upgraded 5-Guard & 3-Layer Edition
 Evaluates:
@@ -47,7 +48,7 @@ def print_section(title: str):
     print('='*75)
 
 
-def check_setup() -> bool:
+def check_setup(input_file: Path = None) -> bool:
     """Pre-flight checks to ensure all model, config, and data files are in place."""
     print_section("PRE-FLIGHT ENVIRONMENT & MODEL CHECKS")
 
@@ -98,12 +99,12 @@ def check_setup() -> bool:
         checks.append(False)
 
     # 4. Check test dataset
-    test_data_path = Config.DATA_DIR / "test_attacks.json"
-    if test_data_path.exists():
-        print(f"  [+] Test dataset ready ({test_data_path.name})")
+    target_data_path = input_file if input_file else (Config.DATA_DIR / "test_attacks.json")
+    if target_data_path.exists():
+        print(f"  [+] Target dataset ready ({target_data_path.name})")
         checks.append(True)
     else:
-        print(f"  [X] Test dataset missing at {test_data_path}")
+        print(f"  [X] Target dataset missing at {target_data_path}")
         checks.append(False)
 
     all_passed = all(checks)
@@ -121,13 +122,22 @@ def build_mock_groq_response(text: str):
     return SimpleNamespace(choices=[choice])
 
 
-def run_simulation():
-    """Execute full simulation against test_attacks.json with full decision trails."""
+def run_simulation(input_path: Path = None, output_path: Path = None):
+    """Execute full simulation against labeled or unlabeled test cases with full decision trails."""
     print_section("RUNNING FULL 3-LAYER DEFENSE & FUSION SIMULATION")
 
-    test_data_path = Config.DATA_DIR / "test_attacks.json"
+    test_data_path = input_path if input_path else (Config.DATA_DIR / "test_attacks.json")
+    print(f"  Dataset Source: {test_data_path}")
     with open(test_data_path, "r", encoding="utf-8") as f:
-        test_cases = json.load(f)
+        raw_data = json.load(f)
+
+    # Normalize input: support list of dicts or list of raw prompt strings
+    test_cases = []
+    for idx, item in enumerate(raw_data, 1):
+        if isinstance(item, str):
+            test_cases.append({"id": f"prompt_{idx:02d}", "prompt": item, "description": f"Unlabeled Prompt #{idx}"})
+        elif isinstance(item, dict):
+            test_cases.append(item)
 
     canary_manager = CanaryManager()
     tool_call_auditor = ToolCallAuditor()
@@ -138,6 +148,9 @@ def run_simulation():
     total_benign = 0
     attack_bypassed = 0
     benign_blocked = 0
+    total_unlabeled = 0
+    unlabeled_blocked = 0
+    unlabeled_allowed = 0
 
     rule_a_blocks = 0
     rule_b_blocks = 0
@@ -153,15 +166,20 @@ def run_simulation():
     results = []
 
     for idx, tc in enumerate(test_cases, 1):
-        prompt = tc["prompt"]
-        desc = tc["description"]
-        expected_verdict = tc.get("expected_verdict", "allowed")
-        is_attack = expected_verdict != "allowed"
+        prompt = tc.get("prompt", "")
+        desc = tc.get("description", f"Test Case #{idx}")
+        expected_verdict = tc.get("expected_verdict")
+        is_labeled = expected_verdict not in (None, "", "unlabeled")
 
-        if is_attack:
-            total_attacks += 1
+        if is_labeled:
+            is_attack = expected_verdict != "allowed"
+            if is_attack:
+                total_attacks += 1
+            else:
+                total_benign += 1
         else:
-            total_benign += 1
+            is_attack = None
+            total_unlabeled += 1
 
         print(f"\n[Test Case #{idx:02d}] {desc}")
         print(f"  User Prompt: \"{prompt[:70]}{'...' if len(prompt) > 70 else ''}\"")
@@ -392,21 +410,31 @@ def run_simulation():
 
         print(f"  \\-- FINAL VERDICT: {status_icon} | {cause_str} (Total: {total_latency:.1f}ms)")
 
-        # Validate against expectations
-        if is_attack and decision == "allowed":
-            attack_bypassed += 1
-            print("      [!] [ALERT] Attack bypassed defenses!")
-        elif not is_attack and decision == "blocked":
-            benign_blocked += 1
-            print("      [!] [ALERT] Benign prompt was falsely blocked!")
+        # Validate against expectations or record unlabeled predictions
+        if is_labeled:
+            if is_attack and decision == "allowed":
+                attack_bypassed += 1
+                print("      [!] [ALERT] Attack bypassed defenses!")
+            elif not is_attack and decision == "blocked":
+                benign_blocked += 1
+                print("      [!] [ALERT] Benign prompt was falsely blocked!")
+        else:
+            if decision == "blocked":
+                unlabeled_blocked += 1
+                print(f"      [PREDICTION] Input classified as MALICIOUS -> BLOCKED via [{blocking_stage}]")
+            else:
+                unlabeled_allowed += 1
+                print("      [PREDICTION] Input classified as BENIGN -> ALLOWED")
 
         results.append({
-            "id": tc.get("id"),
+            "id": tc.get("id", f"case_{idx}"),
             "prompt": prompt,
-            "is_attack": is_attack,
-            "final_decision": decision,
+            "is_labeled": is_labeled,
+            "expected_verdict": expected_verdict,
+            "predicted_decision": decision,
             "blocking_stage": blocking_stage,
             "fusion_rule": fusion_rule,
+            "blocking_reason": blocking_reason,
             "latency_ms": round(total_latency, 2)
         })
 
@@ -415,14 +443,28 @@ def run_simulation():
     # -----------------------------------------------------------------
     print_section("COMPREHENSIVE DEFENSE & FUSION EVALUATION SUMMARY")
 
-    asr = (attack_bypassed / total_attacks * 100) if total_attacks > 0 else 0.0
-    fpr = (benign_blocked / total_benign * 100) if total_benign > 0 else 0.0
+    print(f"  Total Prompts Evaluated       : {total_cases}")
 
-    print(f"  Test Prompts Evaluated        : {total_cases}")
-    print(f"  Total Attack Injections       : {total_attacks}")
-    print(f"  Total Benign Queries          : {total_benign}")
-    print(f"  Attack Success Rate (ASR)     : {asr:.2f}% (Bypassed: {attack_bypassed}/{total_attacks})")
-    print(f"  False Positive Rate (FPR)     : {fpr:.2f}% (Falsely Blocked: {benign_blocked}/{total_benign})")
+    # Labeled ground-truth performance
+    if (total_attacks + total_benign) > 0:
+        asr = (attack_bypassed / total_attacks * 100) if total_attacks > 0 else 0.0
+        fpr = (benign_blocked / total_benign * 100) if total_benign > 0 else 0.0
+        print("\n  [LABELED BENCHMARK GROUND-TRUTH METRICS]")
+        print(f"  * Total Attack Injections     : {total_attacks}")
+        print(f"  * Total Benign Queries        : {total_benign}")
+        print(f"  * Attack Success Rate (ASR)   : {asr:.2f}% (Bypassed: {attack_bypassed}/{total_attacks})")
+        print(f"  * False Positive Rate (FPR)   : {fpr:.2f}% (Falsely Blocked: {benign_blocked}/{total_benign})")
+    else:
+        asr, fpr = None, None
+
+    # Unlabeled inference summary
+    if total_unlabeled > 0:
+        pct_blocked = (unlabeled_blocked / total_unlabeled * 100)
+        pct_allowed = (unlabeled_allowed / total_unlabeled * 100)
+        print("\n  [UNLABELED PROMPTS PREDICTION REPORT]")
+        print(f"  * Total Unlabeled Prompts     : {total_unlabeled}")
+        print(f"  * Predicted as BLOCKED        : {unlabeled_blocked} ({pct_blocked:.1f}%)")
+        print(f"  * Predicted as ALLOWED        : {unlabeled_allowed} ({pct_allowed:.1f}%)")
 
     print("\n  [FUSION ENGINE & LAYER BLOCK BREAKDOWN]")
     print(f"  * Rule A Blocks (Layer 2 Standalone, Score >= 50) : {rule_a_blocks}")
@@ -449,6 +491,7 @@ def run_simulation():
         "total_prompts": total_cases,
         "attack_success_rate": asr,
         "false_positive_rate": fpr,
+        "predictions": results,
         "rule_breakdown": {
             "rule_a": rule_a_blocks,
             "rule_b": rule_b_blocks,
@@ -460,15 +503,33 @@ def run_simulation():
 
 
 def main():
-    """Main execution function."""
+    """Main execution function with command-line arguments."""
+    parser = argparse.ArgumentParser(description="Run 3-Layer Prompt Injection Defense Simulation")
+    parser.add_argument("--input", "-i", type=str, default=None, help="Path to input test JSON file (labeled or unlabeled)")
+    parser.add_argument("--output", "-o", type=str, default=None, help="Path to save prediction outputs JSON")
+    args = parser.parse_args()
+
+    input_path = Path(args.input) if args.input else None
+    output_path = Path(args.output) if args.output else (Config.DATA_DIR / "simulation_predictions.json")
+
     print("="*75)
     print(" PROMPT INJECTION DEFENSE SYSTEM — 3-LAYER FUSION SIMULATOR")
     print("="*75)
 
-    if not check_setup():
+    if not check_setup(input_path):
         sys.exit(1)
 
-    return run_simulation()
+    res = run_simulation(input_path=input_path, output_path=output_path)
+
+    # Save detailed prediction results
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(res.get("predictions", []), f, indent=2)
+        print(f"  [+] Full predictions saved to: {output_path}")
+    except Exception as e:
+        print(f"  [!] Note: Could not write predictions file: {e}")
+
+    return res
 
 
 if __name__ == "__main__":
